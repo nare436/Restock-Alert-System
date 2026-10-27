@@ -55,7 +55,7 @@ class Settings:
             availability_status_path=os.getenv("AVAILABILITY_STATUS_PATH", "").strip(),
             in_stock_values=_csv("IN_STOCK_VALUES", "in_stock,available,true,1"),
             out_of_stock_values=_csv("OUT_OF_STOCK_VALUES", "out_of_stock,unavailable,false,0"),
-            check_interval_seconds=max(60, int(os.getenv("CHECK_INTERVAL_SECONDS", "60"))),
+            check_interval_seconds=max(180, int(os.getenv("CHECK_INTERVAL_SECONDS", "180"))),
             request_timeout_seconds=max(2, int(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))),
             state_file=Path(os.getenv("STATE_FILE", "data/state.json")),
             dry_run=_bool("DRY_RUN", True),
