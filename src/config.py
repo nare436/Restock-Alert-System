@@ -1,4 +1,4 @@
-"""Environment-based configuration for the restock alert."""
+"""Environment-based configuration for the Telegram-only restock alert."""
 
 from dataclasses import dataclass
 import os
@@ -35,13 +35,6 @@ class Settings:
     notify_telegram: bool
     telegram_bot_token: str
     telegram_chat_id: str
-    notify_email: bool
-    smtp_host: str
-    smtp_port: int
-    smtp_username: str
-    smtp_password: str
-    email_from: str
-    email_to: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -62,19 +55,7 @@ class Settings:
             notify_telegram=_bool("NOTIFY_TELEGRAM", False),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
-            notify_email=_bool("NOTIFY_EMAIL", False),
-            smtp_host=os.getenv("SMTP_HOST", "").strip(),
-            smtp_port=int(os.getenv("SMTP_PORT", "587")),
-            smtp_username=os.getenv("SMTP_USERNAME", "").strip(),
-            smtp_password=os.getenv("SMTP_PASSWORD", ""),
-            email_from=os.getenv("EMAIL_FROM", "").strip(),
-            email_to=os.getenv("EMAIL_TO", "").strip(),
         )
 
     def enabled_channels(self) -> tuple[str, ...]:
-        channels: list[str] = []
-        if self.notify_telegram:
-            channels.append("telegram")
-        if self.notify_email:
-            channels.append("email")
-        return tuple(channels)
+        return ("telegram",) if self.notify_telegram else ()
