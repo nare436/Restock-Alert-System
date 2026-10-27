@@ -30,3 +30,5 @@ jobs:
           AVAILABILITY_MODE: disabled
           DRY_RUN: "true"
         run: python -m src.monitor --once
+      - name: Validate Cloudflare Worker syntax
+        run: node --check --input-type=module < cloudflare/worker.js
