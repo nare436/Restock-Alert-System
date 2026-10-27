@@ -93,12 +93,16 @@ def send_email(settings: Settings, message: str, subject: str = "Microsoft Rewar
         return False
 
 
-def send_configured(settings: Settings, message: str) -> dict[str, bool]:
-    """Return each configured channel's result; failures are retried on future checks."""
+def send_configured(
+    settings: Settings,
+    message: str,
+    only_channels: tuple[str, ...] | None = None,
+) -> dict[str, bool]:
+    """Send only selected channels; failed channels can be retried without duplicates."""
     results: dict[str, bool] = {}
-    if settings.notify_telegram:
+    if settings.notify_telegram and (only_channels is None or "telegram" in only_channels):
         results["telegram"] = send_telegram(settings, message)
-    if settings.notify_email:
+    if settings.notify_email and (only_channels is None or "email" in only_channels):
         results["email"] = send_email(settings, message)
     return results
 
