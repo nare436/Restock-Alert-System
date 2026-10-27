@@ -1,6 +1,6 @@
 # Microsoft Rewards Flipkart Restock Alert
 
-A small Python service that can monitor a configured, **permitted availability source** and notify you by Telegram and/or email when the state changes to in stock. It never redeems points automatically.
+A Python + Cloudflare Worker restock monitor that can notify you by Telegram and Gmail when a configured, **permitted availability source** reports in-stock. Telegram commands include /check, /status, /testemail, and /help. It never redeems points automatically.
 
 Reward page: https://rewards.bing.com/redeem/sku/000885000034
 
@@ -23,7 +23,8 @@ Permitted availability adapter
           |
           +----> Telegram Bot API (optional)
           |
-          +----> SMTP email (optional)
+          +----> Telegram Bot API (commands + alerts)
+          +----> Google Apps Script MailApp -> Gmail (alerts)
 ```
 
 ## Local setup (Windows PowerShell)
@@ -96,8 +97,9 @@ The adapter makes an unauthenticated GET request with a timeout. It returns `UNK
 
 After configuring the Telegram webhook (steps below), open the bot and send:
 
-- `/check` — performs an availability check immediately, then replies with `IN STOCK`, `OUT OF STOCK`, or `UNKNOWN`.
+- `/check` — performs a permitted availability check immediately, then replies with `IN STOCK`, `OUT OF STOCK`, or `UNKNOWN`.
 - `/status` — shows the most recent check result and when it ran.
+- `/testemail` — sends a test email to the fixed recipient configured in Google Apps Script.
 - `/help` — shows the available commands.
 
 Scheduled Cloudflare checks run every 3 minutes. A manual `/check` is on demand, but it still respects any rate limit or `Retry-After` instruction from the availability source. Commands are restricted to the private Telegram chat ID in `TELEGRAM_CHAT_ID`.
@@ -150,6 +152,39 @@ The Worker endpoint is `/telegram`. It requires a Telegram webhook secret and on
 
 This creates the bot webhook; it does not configure a Microsoft stock endpoint. Until a documented/permitted availability source is configured, manual `/check` correctly reports `UNKNOWN`, not a false stock result.
 
+## Gmail alerts using Google Apps Script (free)
+
+The Cloudflare Worker cannot use ordinary Gmail SMTP directly. This project therefore includes `google-apps-script/Code.gs`, a small Google Apps Script relay that sends two fixed kinds of mail using your Gmail/Google account. It never reads your inbox and only sends to the single recipient saved in Script Properties.
+
+1. Open [Google Apps Script](https://script.google.com/) while signed into the Gmail account you use to send email, then choose **New project**.
+2. Open the repository file [`google-apps-script/Code.gs`](https://github.com/nare436/Restock-Alert-System/blob/main/google-apps-script/Code.gs), copy the entire code, and paste it into the Apps Script editor, replacing the starter code. Save the project.
+3. In Apps Script, open **Project Settings** (gear icon) → **Script Properties** → **Add script property**, and create these three entries:
+   - `EMAIL_TO` = the email address that should receive alerts.
+   - `EMAIL_RELAY_SECRET` = a strong secret you generate locally. Do not use your Gmail password.
+   - `REDEMPTION_URL` = `https://rewards.bing.com/redeem/sku/000885000034`
+4. In the editor's function dropdown, choose `authorizeMailPermissions` and click **Run**. Accept Google's requested mail-sending permission. This function does not send an email.
+5. Click **Deploy → New deployment → Select type → Web app**. Set **Execute as: Me**. Choose the least restrictive access option that your personal account permits (the worker must be able to call the endpoint anonymously); use this only because requests are protected by the shared secret. Click **Deploy** and approve any Google permission prompts. Copy the deployed URL ending in `/exec`.
+6. Keep the relay URL and secret private. Do not place them in the repository or this chat.
+
+### Add private values to Cloudflare
+
+Run these commands in the same PowerShell window used for Wrangler; each command will prompt you to enter a value. Paste the value only into that prompt:
+
+```powershell
+npx wrangler secret put EMAIL_RELAY_URL
+npx wrangler secret put EMAIL_RELAY_SECRET
+```
+
+For `EMAIL_RELAY_URL`, enter the deployed Apps Script URL ending in `/exec`. For `EMAIL_RELAY_SECRET`, enter the exact same value you saved as the Apps Script `EMAIL_RELAY_SECRET` property.
+
+Then deploy the current code:
+
+```powershell
+npx wrangler deploy
+```
+
+After the Telegram webhook is registered, send `/testemail` to your bot. You should receive a test email. The relay never accepts a recipient address from the incoming request; the fixed `EMAIL_TO` script property controls where email goes. The endpoint URL is publicly reachable when anonymous access is enabled, so keep the secret strong and private. Google Apps Script quotas and account security controls apply.
+
 ## Files
 
 - `src/availability.py`: status model and conservative JSON adapter.
@@ -161,7 +196,7 @@ This creates the bot webhook; it does not configure a Microsoft stock endpoint. 
 
 ## Free every-three-minutes Cloudflare deployment
 
-Cloudflare Workers Cron Triggers support `*/3 * * * *` (every three minutes) on the Free plan. This repository includes an alternate Worker entry point at `cloudflare/worker.js` and `wrangler.toml`. The hosted Worker sends Telegram alerts; the Python version remains useful for local monitoring and optional SMTP email.
+Cloudflare Workers Cron Triggers support `*/3 * * * *` (every three minutes) on the Free plan. This repository includes an alternate Worker entry point at `cloudflare/worker.js` and `wrangler.toml`. The hosted Worker sends Telegram alerts and Gmail messages through the Google Apps Script relay; the Python version also supports optional SMTP email for local use.
 
 1. Install Node.js LTS from https://nodejs.org/ and open PowerShell in the project directory.
 2. Install and sign in to Wrangler:
@@ -178,7 +213,7 @@ Cloudflare Workers Cron Triggers support `*/3 * * * *` (every three minutes) on 
 
    Copy the returned namespace ID into `wrangler.toml`, replacing `REPLACE_WITH_KV_NAMESPACE_ID`.
 
-4. Create a Telegram bot with @BotFather, start a chat with it, and obtain your chat ID. Configure secrets:
+4. Create a Telegram bot with @BotFather, start a chat with it, and obtain your private chat ID. Configure the Telegram secrets below. The Gmail relay secrets are described in the Gmail section above.
 
    ```powershell
    npx wrangler secret put TELEGRAM_BOT_TOKEN
