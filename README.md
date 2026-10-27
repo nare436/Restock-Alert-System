@@ -101,6 +101,47 @@ The adapter makes an unauthenticated GET request with a timeout. It returns `UNK
 - `tests/`: unit tests with mocked responses.
 - `.github/workflows/ci.yml`: CI/test workflow.
 
+## Free minute-by-minute Cloudflare deployment
+
+Cloudflare Workers Cron Triggers support `* * * * *` (every minute) on the Free plan. This repository includes an alternate Worker entry point at `cloudflare/worker.js` and `wrangler.toml`. The hosted Worker sends Telegram alerts; the Python version remains useful for local monitoring and optional SMTP email.
+
+1. Install Node.js LTS from https://nodejs.org/ and open PowerShell in the project directory.
+2. Install and sign in to Wrangler:
+
+   ```powershell
+   npx wrangler login
+   ```
+
+3. Create the state namespace:
+
+   ```powershell
+   npx wrangler kv namespace create ALERT_STATE
+   ```
+
+   Copy the returned namespace ID into `wrangler.toml`, replacing `REPLACE_WITH_KV_NAMESPACE_ID`.
+
+4. Create a Telegram bot with @BotFather, start a chat with it, and obtain your chat ID. Configure secrets:
+
+   ```powershell
+   npx wrangler secret put TELEGRAM_BOT_TOKEN
+   npx wrangler secret put TELEGRAM_CHAT_ID
+   ```
+
+   Enter the value when Wrangler prompts. Never commit either value.
+
+5. Keep `AVAILABILITY_MODE = "disabled"` until you have verified a documented/permitted JSON stock source. Then edit `AVAILABILITY_MODE`, `AVAILABILITY_URL`, `AVAILABILITY_STATUS_PATH`, and the explicit stock-value lists in `wrangler.toml`.
+6. Deploy:
+
+   ```powershell
+   npx wrangler deploy
+   ```
+
+7. Open Cloudflare Dashboard → Workers & Pages → your Worker → Settings/Triggers and confirm the Cron Trigger is `* * * * *`. Check **Logs** after scheduled runs.
+
+The Worker reads state from a KV namespace. Cloudflare's free KV allowance currently includes 100,000 reads/day and 1,000 writes/day; this Worker writes state mainly on status changes or when rate-limited. KV is eventually consistent, so avoid deploying multiple copies of the same monitor and understand that a short delay or rare duplicate is possible. Source-side rate limits still take priority over checking every minute.
+
+**Do not set an endpoint URL until you have verified that automated polling is permitted.** The Worker performs unauthenticated GET requests only and never uses Microsoft account cookies, sessions, passwords, or CAPTCHA bypasses. It treats unclear responses as `UNKNOWN` and will not send an availability alert.
+
 ## Security
 
 Never commit `.env`, bot tokens, email app passwords, Microsoft account credentials, browser cookies, or session tokens. The tool only sends notifications; it never redeems points.
