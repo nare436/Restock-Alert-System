@@ -1,8 +1,8 @@
 /**
- * Cloudflare Worker for a Microsoft Rewards gift-card availability notifier.
+ * Cloudflare Worker for a Microsoft Rewards gift-card restock notifier.
  *
- * The actual stock source must be documented/permitted and explicitly indicate
- * availability. Never add Microsoft account cookies, passwords, or sessions.
+ * This tool does not redeem rewards. The stock checker stays UNKNOWN until a
+ * documented/permitted availability source is configured.
  */
 const STATE_KEY = "flipkart-gift-card-state";
 const MIN_COOLDOWN_MS = 5 * 60 * 1000;
@@ -39,12 +39,29 @@ function retryAfterMs(value) {
 function baseState() {
   return {
     status: null,
-    notified: false,
+    notifiedTelegram: false,
+    notifiedEmail: false,
     lastCheckStatus: null,
     lastCheckedAt: null,
     lastDetail: "No check has run yet.",
     cooldownUntil: null,
   };
+}
+
+function migrateState(state) {
+  const initial = baseState();
+  if (!state || typeof state !== "object") return initial;
+  return {
+    ...initial,
+    ...state,
+    // Old versions used a single "notified" flag for Telegram.
+    notifiedTelegram: state.notifiedTelegram ?? state.notified ?? false,
+    notifiedEmail: state.notifiedEmail ?? false,
+  };
+}
+
+function redemptionUrl(env) {
+  return env.REDEMPTION_URL || REDEMPTION_FALLBACK;
 }
 
 async function readAvailability(env) {
@@ -108,7 +125,8 @@ async function readState(env) {
     return null;
   }
   try {
-    return (await env.ALERT_STATE.get(STATE_KEY, "json")) || baseState();
+    const state = await env.ALERT_STATE.get(STATE_KEY, "json");
+    return migrateState(state);
   } catch (_error) {
     console.error("Could not read saved state.");
     return null;
@@ -117,10 +135,6 @@ async function readState(env) {
 
 async function saveState(env, state) {
   await env.ALERT_STATE.put(STATE_KEY, JSON.stringify(state));
-}
-
-function redemptionUrl(env) {
-  return env.REDEMPTION_URL || REDEMPTION_FALLBACK;
 }
 
 async function sendTelegramMessage(env, chatId, text) {
@@ -146,6 +160,41 @@ async function sendTelegramMessage(env, chatId, text) {
     return body.ok === true;
   } catch (_error) {
     console.error("Telegram notification request failed.");
+    return false;
+  }
+}
+
+async function sendEmailRelay(env, kind) {
+  if (!env.EMAIL_RELAY_URL || !env.EMAIL_RELAY_SECRET) {
+    console.error("Gmail relay is not configured.");
+    return false;
+  }
+  if (!["restock", "test"].includes(kind)) return false;
+
+  try {
+    const response = await fetch(env.EMAIL_RELAY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        secret: env.EMAIL_RELAY_SECRET,
+        kind,
+        redemptionUrl: redemptionUrl(env),
+      }),
+      signal: AbortSignal.timeout(15_000),
+      redirect: "follow",
+    });
+    if (!response.ok) {
+      console.error(`Gmail relay returned HTTP ${response.status}.`);
+      return false;
+    }
+    const result = await response.json();
+    if (result.ok !== true) {
+      console.error("Gmail relay did not confirm email delivery.");
+      return false;
+    }
+    return true;
+  } catch (_error) {
+    console.error("Gmail relay request failed.");
     return false;
   }
 }
@@ -195,6 +244,18 @@ function statusReply(env, state) {
   );
 }
 
+async function notifyRestockChannels(env, state) {
+  if (!state.notifiedTelegram) {
+    const ok = await sendTelegramMessage(env, env.TELEGRAM_CHAT_ID, restockAlertText(env));
+    if (ok) state.notifiedTelegram = true;
+  }
+  if (!state.notifiedEmail) {
+    const ok = await sendEmailRelay(env, "restock");
+    if (ok) state.notifiedEmail = true;
+  }
+  return state;
+}
+
 async function checkAndNotify(env, manualChatId = null) {
   const state = await readState(env);
   if (!state) {
@@ -202,7 +263,7 @@ async function checkAndNotify(env, manualChatId = null) {
       await sendTelegramMessage(
         env,
         manualChatId,
-        "⚠️ I could not read the saved monitoring state. Please contact the bot administrator.",
+        "⚠️ I could not read the saved monitoring state. Please check Worker logs.",
       );
     }
     return { status: "UNKNOWN", detail: "Saved state unavailable." };
@@ -213,20 +274,19 @@ async function checkAndNotify(env, manualChatId = null) {
     typeof state.cooldownUntil === "number"
       ? state.cooldownUntil
       : (state.cooldownUntil ? Date.parse(state.cooldownUntil) : NaN);
+
   if (Number.isFinite(cooldownAt) && now < cooldownAt) {
     const waitSeconds = Math.ceil((cooldownAt - now) / 1000);
-    const cooldownResult = {
+    const result = {
       status: "UNKNOWN",
       detail: `The source asked us to wait. Try again in about ${waitSeconds} seconds.`,
     };
-    state.lastCheckStatus = cooldownResult.status;
+    state.lastCheckStatus = result.status;
     state.lastCheckedAt = new Date(now).toISOString();
-    state.lastDetail = cooldownResult.detail;
+    state.lastDetail = result.detail;
     await saveState(env, state);
-    if (manualChatId) {
-      await sendTelegramMessage(env, manualChatId, checkResultText(env, cooldownResult));
-    }
-    return cooldownResult;
+    if (manualChatId) await sendTelegramMessage(env, manualChatId, checkResultText(env, result));
+    return result;
   }
   state.cooldownUntil = null;
 
@@ -240,46 +300,30 @@ async function checkAndNotify(env, manualChatId = null) {
       state.cooldownUntil = new Date(Date.now() + Math.max(MIN_COOLDOWN_MS, result.retryAfter)).toISOString();
     }
     await saveState(env, state);
-    if (manualChatId) {
-      await sendTelegramMessage(env, manualChatId, checkResultText(env, result));
-    }
+    if (manualChatId) await sendTelegramMessage(env, manualChatId, checkResultText(env, result));
     console.log(`Availability status: UNKNOWN; ${result.detail}`);
     return result;
   }
 
   if (result.status === "OUT_OF_STOCK") {
     state.status = "OUT_OF_STOCK";
-    state.notified = false;
+    state.notifiedTelegram = false;
+    state.notifiedEmail = false;
     await saveState(env, state);
-    if (manualChatId) {
-      await sendTelegramMessage(env, manualChatId, checkResultText(env, result));
-    }
+    if (manualChatId) await sendTelegramMessage(env, manualChatId, checkResultText(env, result));
     console.log("Availability status: OUT_OF_STOCK");
     return result;
   }
 
-  // A manual /check reply itself counts as the alert for this authorized chat.
-  if (manualChatId) {
-    const delivered = await sendTelegramMessage(env, manualChatId, checkResultText(env, result));
-    if (delivered) {
-      state.status = "IN_STOCK";
-      state.notified = true;
-    } else if (state.status !== "IN_STOCK") {
-      state.status = "IN_STOCK";
-      state.notified = false;
-    }
-    await saveState(env, state);
-    console.log("Availability status: IN_STOCK (manual check)");
-    return result;
-  }
-
-  // Scheduled checks send one restock alert until the item is seen out of stock again.
-  if (state.status !== "IN_STOCK" || state.notified !== true) {
-    const delivered = await sendTelegramMessage(env, env.TELEGRAM_CHAT_ID, restockAlertText(env));
-    state.status = "IN_STOCK";
-    state.notified = delivered;
-  }
+  // Alert each configured channel independently. Failed channels retry later,
+  // without repeating delivery to channels that already succeeded.
+  state.status = "IN_STOCK";
+  await notifyRestockChannels(env, state);
   await saveState(env, state);
+
+  if (manualChatId) {
+    await sendTelegramMessage(env, manualChatId, checkResultText(env, result));
+  }
   console.log("Availability status: IN_STOCK");
   return result;
 }
@@ -289,9 +333,10 @@ function helpText() {
     "🤖 Microsoft Rewards Restock Alert Bot\n\n" +
     "/check — check availability now\n" +
     "/status — show the last saved check result\n" +
+    "/testemail — send a test email to your configured Gmail address\n" +
     "/help — show these commands\n\n" +
-    "Automatic checks run every 3 minutes. A manual /check respects source rate limits. " +
-    "The stock checker only works after a permitted availability source is configured."
+    "Automatic checks run every 3 minutes. A manual /check is on demand but respects source rate limits. " +
+    "The stock checker works only after a permitted availability source is configured."
   );
 }
 
@@ -316,7 +361,6 @@ async function handleTelegramUpdate(request, env) {
   }
 
   const chatId = String(message.chat.id);
-  // Do not let other people trigger checks or read saved state.
   if (!env.TELEGRAM_CHAT_ID || chatId !== String(env.TELEGRAM_CHAT_ID)) {
     console.warn("Ignored a Telegram message from an unapproved chat.");
     return new Response("OK");
@@ -328,11 +372,11 @@ async function handleTelegramUpdate(request, env) {
     return new Response("OK");
   }
   if (command === "/status") {
-    const state = await readState(env);
+    const latest = await readState(env);
     await sendTelegramMessage(
       env,
       chatId,
-      state ? statusReply(env, state) : "⚠️ Could not read saved status. Check Worker logs.",
+      latest ? statusReply(env, latest) : "⚠️ Could not read saved status. Check Worker logs.",
     );
     return new Response("OK");
   }
@@ -340,8 +384,19 @@ async function handleTelegramUpdate(request, env) {
     await checkAndNotify(env, chatId);
     return new Response("OK");
   }
+  if (command === "/testemail") {
+    const ok = await sendEmailRelay(env, "test");
+    await sendTelegramMessage(
+      env,
+      chatId,
+      ok
+        ? "✅ Test email sent to your configured Gmail address."
+        : "❌ Test email failed. Check your Google Apps Script deployment and Cloudflare email relay secrets.",
+    );
+    return new Response("OK");
+  }
 
-  await sendTelegramMessage(env, chatId, "I don't recognize that command. Send /help to see the available commands.");
+  await sendTelegramMessage(env, chatId, "I don't recognize that command. Send /help to see available commands.");
   return new Response("OK");
 }
 
@@ -357,7 +412,7 @@ export default {
     }
     if (request.method === "GET" && url.pathname === "/") {
       return new Response(
-        "Restock Alert Worker is running. Automatic checks run every 3 minutes. In Telegram, use /check, /status, or /help.\n",
+        "Restock Alert Worker is running. Automatic checks run every 3 minutes. In Telegram, use /check, /status, /testemail, or /help.\n",
         { headers: { "content-type": "text/plain; charset=utf-8" } },
       );
     }
