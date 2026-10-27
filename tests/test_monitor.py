@@ -40,7 +40,7 @@ class MonitorTests(unittest.TestCase):
             state_path = Path(directory) / "state.json"
             calls = []
 
-            def sender(settings, message):
+            def sender(settings, message, channels):
                 calls.append(message)
                 return {"telegram": True}
 
@@ -69,7 +69,7 @@ class MonitorTests(unittest.TestCase):
             state_path = Path(directory) / "state.json"
             calls = []
 
-            def sender(settings, message):
+            def sender(settings, message, channels):
                 calls.append(1)
                 # Telegram succeeded, email failed.
                 return {"telegram": True, "email": False}
