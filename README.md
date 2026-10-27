@@ -8,7 +8,7 @@ Reward page: https://rewards.bing.com/redeem/sku/000885000034
 
 This repository does **not** assume Microsoft has a public or documented stock API. The default adapter deliberately returns `UNKNOWN` until a source is implemented and verified as permitted. It will not parse undocumented/private endpoints, reuse account cookies, bypass sign-in/CAPTCHA, or treat HTTP 200 as proof of stock.
 
-Do not configure a one-minute polling frequency unless the data source permits it and the hosting platform supports it. GitHub Actions scheduled workflows are not suitable for reliable one-minute polling and can be delayed; the included workflow is a test runner, not a guaranteed stock checker.
+Do not configure a three-minute polling frequency unless the data source permits it and the hosting platform supports it. GitHub Actions scheduled workflows are not suitable for reliable three-minute polling and can be delayed; the included workflow is a test runner, not a guaranteed stock checker.
 
 ## Architecture
 
@@ -75,11 +75,11 @@ Once you have configured a permitted availability source and notification channe
 python -m src.monitor --loop
 ```
 
-The interval is at least 60 seconds, with exponential backoff for unknown/error results and respect for integer `Retry-After` values. Leave your computer on and connected; closing the terminal stops monitoring. Use `--once` for one check.
+The Python loop interval is at least 180 seconds (3 minutes), with exponential backoff for unknown/error results and respect for integer `Retry-After` values. Leave your computer on and connected; closing the terminal stops monitoring. Use `--once` for one check.
 
 ## GitHub Actions
 
-The workflow runs unit tests and a manual smoke check. It intentionally does not run every minute. GitHub Actions schedules aren't a one-minute monitoring solution and may be delayed. Secrets can be added under **Settings → Secrets and variables → Actions**; never add credentials to the repository files.
+The workflow runs unit tests and a manual smoke check. It intentionally does not run every three minutes. GitHub Actions schedules aren't a three-minute monitoring solution and may be delayed. Secrets can be added under **Settings → Secrets and variables → Actions**; never add credentials to the repository files.
 
 ## Configure a permitted JSON availability source
 
@@ -92,6 +92,64 @@ Edit `.env` only after verifying that you are authorized to poll the endpoint an
 
 The adapter makes an unauthenticated GET request with a timeout. It returns `UNKNOWN` on non-JSON responses, unrecognized values, HTTP errors, network failures, and rate limits. It never treats a bare HTTP 200 as in-stock proof.
 
+## Telegram commands
+
+After configuring the Telegram webhook (steps below), open the bot and send:
+
+- `/check` — performs an availability check immediately, then replies with `IN STOCK`, `OUT OF STOCK`, or `UNKNOWN`.
+- `/status` — shows the most recent check result and when it ran.
+- `/help` — shows the available commands.
+
+Scheduled Cloudflare checks run every 3 minutes. A manual `/check` is on demand, but it still respects any rate limit or `Retry-After` instruction from the availability source. Commands are restricted to the private Telegram chat ID in `TELEGRAM_CHAT_ID`.
+
+## Connect Telegram commands to Cloudflare
+
+The Worker endpoint is `/telegram`. It requires a Telegram webhook secret and only accepts commands from the chat ID configured in `TELEGRAM_CHAT_ID`.
+
+1. In Cloudflare, run from the repository folder in PowerShell:
+
+   ```powershell
+   npx wrangler secret put TELEGRAM_BOT_TOKEN
+   npx wrangler secret put TELEGRAM_CHAT_ID
+   npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
+   ```
+
+   When prompted, paste each value directly into the terminal, not into GitHub files or this chat. Generate the webhook secret with `[guid]::NewGuid().ToString("N")` in PowerShell and keep a copy for the next step. The bot token is obtained from **@BotFather**. The chat ID is the number for your private conversation with your bot.
+
+2. Deploy the Worker after configuring the KV namespace ID in `wrangler.toml`:
+
+   ```powershell
+   npx wrangler deploy
+   ```
+
+3. Register Telegram's webhook using PowerShell (the Worker URL is shown by Wrangler after deployment). The commands below ask you to paste the token and webhook secret interactively, so the token does not need to be hardcoded in the script:
+
+   ```powershell
+   $botToken = Read-Host "Paste Telegram bot token"
+   $webhookSecret = Read-Host "Paste the same webhook secret used in Cloudflare"
+   $workerUrl = Read-Host "Paste your deployed Worker URL (https://...)"
+   $body = @{
+     url = "$($workerUrl.TrimEnd('/'))/telegram"
+     secret_token = $webhookSecret
+     allowed_updates = @("message")
+   } | ConvertTo-Json
+   Invoke-RestMethod -Method Post -Uri "https://api.telegram.org/bot$botToken/setWebhook" -ContentType "application/json" -Body $body
+   Remove-Variable botToken, webhookSecret
+   ```
+
+   Telegram should return `ok: true`. Then open your bot and send `/start`, followed by `/status`.
+
+4. Optional: use **@BotFather** → `/setcommands` to show the commands in Telegram's menu. Select the bot and paste:
+
+   ```text
+   start - Show help
+   help - Show available commands
+   status - Show latest availability check
+   check - Check availability now
+   ```
+
+This creates the bot webhook; it does not configure a Microsoft stock endpoint. Until a documented/permitted availability source is configured, manual `/check` correctly reports `UNKNOWN`, not a false stock result.
+
 ## Files
 
 - `src/availability.py`: status model and conservative JSON adapter.
@@ -101,9 +159,9 @@ The adapter makes an unauthenticated GET request with a timeout. It returns `UNK
 - `tests/`: unit tests with mocked responses.
 - `.github/workflows/ci.yml`: CI/test workflow.
 
-## Free minute-by-minute Cloudflare deployment
+## Free every-three-minutes Cloudflare deployment
 
-Cloudflare Workers Cron Triggers support `* * * * *` (every minute) on the Free plan. This repository includes an alternate Worker entry point at `cloudflare/worker.js` and `wrangler.toml`. The hosted Worker sends Telegram alerts; the Python version remains useful for local monitoring and optional SMTP email.
+Cloudflare Workers Cron Triggers support `* * * * *` (every three minutes) on the Free plan. This repository includes an alternate Worker entry point at `cloudflare/worker.js` and `wrangler.toml`. The hosted Worker sends Telegram alerts; the Python version remains useful for local monitoring and optional SMTP email.
 
 1. Install Node.js LTS from https://nodejs.org/ and open PowerShell in the project directory.
 2. Install and sign in to Wrangler:
@@ -138,7 +196,7 @@ Cloudflare Workers Cron Triggers support `* * * * *` (every minute) on the Free 
 
 7. Open Cloudflare Dashboard → Workers & Pages → your Worker → Settings/Triggers and confirm the Cron Trigger is `* * * * *`. Check **Logs** after scheduled runs.
 
-The Worker reads state from a KV namespace. Cloudflare's free KV allowance currently includes 100,000 reads/day and 1,000 writes/day; this Worker writes state mainly on status changes or when rate-limited. KV is eventually consistent, so avoid deploying multiple copies of the same monitor and understand that a short delay or rare duplicate is possible. Source-side rate limits still take priority over checking every minute.
+The Worker reads state from a KV namespace. Cloudflare's free KV allowance currently includes 100,000 reads/day and 1,000 writes/day; this Worker writes state mainly on status changes or when rate-limited. KV is eventually consistent, so avoid deploying multiple copies of the same monitor and understand that a short delay or rare duplicate is possible. Source-side rate limits still take priority over checking every three minutes.
 
 **Do not set an endpoint URL until you have verified that automated polling is permitted.** The Worker performs unauthenticated GET requests only and never uses Microsoft account cookies, sessions, passwords, or CAPTCHA bypasses. It treats unclear responses as `UNKNOWN` and will not send an availability alert.
 
