@@ -73,7 +73,7 @@ def process_result(
 
     pending = [channel for channel in enabled if channel not in notified]
     if pending:
-        results = notification_sender(settings, alert_text(settings))
+        results = notification_sender(settings, alert_text(settings), tuple(pending))
         for channel in pending:
             # A channel is recorded only if it was attempted and confirmed successful.
             if results.get(channel) is True:
