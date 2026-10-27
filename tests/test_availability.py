@@ -22,13 +22,6 @@ def settings(**overrides):
         notify_telegram=False,
         telegram_bot_token="",
         telegram_chat_id="",
-        notify_email=False,
-        smtp_host="",
-        smtp_port=587,
-        smtp_username="",
-        smtp_password="",
-        email_from="",
-        email_to="",
     )
     values.update(overrides)
     return Settings(**values)
