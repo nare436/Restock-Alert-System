@@ -32,3 +32,5 @@ jobs:
         run: python -m src.monitor --once
       - name: Validate Cloudflare Worker syntax
         run: node --check --input-type=module < cloudflare/worker.js
+      - name: Validate Google Apps Script syntax
+        run: node --check < google-apps-script/Code.gs
