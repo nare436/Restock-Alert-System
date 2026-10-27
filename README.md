@@ -161,7 +161,7 @@ This creates the bot webhook; it does not configure a Microsoft stock endpoint. 
 
 ## Free every-three-minutes Cloudflare deployment
 
-Cloudflare Workers Cron Triggers support `* * * * *` (every three minutes) on the Free plan. This repository includes an alternate Worker entry point at `cloudflare/worker.js` and `wrangler.toml`. The hosted Worker sends Telegram alerts; the Python version remains useful for local monitoring and optional SMTP email.
+Cloudflare Workers Cron Triggers support `*/3 * * * *` (every three minutes) on the Free plan. This repository includes an alternate Worker entry point at `cloudflare/worker.js` and `wrangler.toml`. The hosted Worker sends Telegram alerts; the Python version remains useful for local monitoring and optional SMTP email.
 
 1. Install Node.js LTS from https://nodejs.org/ and open PowerShell in the project directory.
 2. Install and sign in to Wrangler:
@@ -183,6 +183,7 @@ Cloudflare Workers Cron Triggers support `* * * * *` (every three minutes) on th
    ```powershell
    npx wrangler secret put TELEGRAM_BOT_TOKEN
    npx wrangler secret put TELEGRAM_CHAT_ID
+   npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
    ```
 
    Enter the value when Wrangler prompts. Never commit either value.
@@ -194,9 +195,9 @@ Cloudflare Workers Cron Triggers support `* * * * *` (every three minutes) on th
    npx wrangler deploy
    ```
 
-7. Open Cloudflare Dashboard → Workers & Pages → your Worker → Settings/Triggers and confirm the Cron Trigger is `* * * * *`. Check **Logs** after scheduled runs.
+7. Open Cloudflare Dashboard → Workers & Pages → your Worker → Settings/Triggers and confirm the Cron Trigger is `*/3 * * * *`. Check **Logs** after scheduled runs.
 
-The Worker reads state from a KV namespace. Cloudflare's free KV allowance currently includes 100,000 reads/day and 1,000 writes/day; this Worker writes state mainly on status changes or when rate-limited. KV is eventually consistent, so avoid deploying multiple copies of the same monitor and understand that a short delay or rare duplicate is possible. Source-side rate limits still take priority over checking every three minutes.
+The Worker reads and saves state in a KV namespace. At a 3-minute schedule it may save about 480 times per day, before manual checks, which is below the documented free-tier write allowance of 1,000 writes/day. KV is eventually consistent, so a short delay or rare duplicate is possible. Source-side rate limits still take priority over checking every three minutes.
 
 **Do not set an endpoint URL until you have verified that automated polling is permitted.** The Worker performs unauthenticated GET requests only and never uses Microsoft account cookies, sessions, passwords, or CAPTCHA bypasses. It treats unclear responses as `UNKNOWN` and will not send an availability alert.
 
