@@ -209,8 +209,12 @@ async function checkAndNotify(env, manualChatId = null) {
   }
 
   const now = Date.now();
-  if (state.cooldownUntil && now < state.cooldownUntil) {
-    const waitSeconds = Math.ceil((state.cooldownUntil - now) / 1000);
+  const cooldownAt =
+    typeof state.cooldownUntil === "number"
+      ? state.cooldownUntil
+      : (state.cooldownUntil ? Date.parse(state.cooldownUntil) : NaN);
+  if (Number.isFinite(cooldownAt) && now < cooldownAt) {
+    const waitSeconds = Math.ceil((cooldownAt - now) / 1000);
     const cooldownResult = {
       status: "UNKNOWN",
       detail: `The source asked us to wait. Try again in about ${waitSeconds} seconds.`,
