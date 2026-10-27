@@ -1,0 +1,21 @@
+name = "restock-alert-system"
+main = "cloudflare/worker.js"
+compatibility_date = "2026-10-27"
+
+[[kv_namespaces]]
+binding = "ALERT_STATE"
+# Replace this with the ID printed by: npx wrangler kv namespace create ALERT_STATE
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+# Keep disabled until a documented/permitted JSON availability source is configured.
+AVAILABILITY_MODE = "disabled"
+AVAILABILITY_URL = ""
+AVAILABILITY_STATUS_PATH = ""
+IN_STOCK_VALUES = "available,in_stock,true,1"
+OUT_OF_STOCK_VALUES = "unavailable,out_of_stock,false,0"
+REDEMPTION_URL = "https://rewards.bing.com/redeem/sku/000885000034"
+
+[triggers]
+# Cloudflare supports this every-minute schedule on its Free plan.
+crons = ["* * * * *"]
